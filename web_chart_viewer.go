@@ -230,6 +230,8 @@ func webStartWebServer() {
 	http.HandleFunc("/", webIndexHandler)
 	http.HandleFunc("/chart", webChartHandler)
 	http.HandleFunc("/data", webDataHandler)
+	http.HandleFunc("/tables", webTablesHandler)
+	http.HandleFunc("/symbols", webSymbolsHandler)
 
 	fmt.Printf("\n\nStarting web server at http://localhost%s\n", WEB_PORT)
 	fmt.Println("Open your browser and visit the URL above to view the chart")
@@ -384,13 +386,14 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             <div class="control-group">
                 <label for="tableSelect">选择数据表:</label>
                 <select id="tableSelect">
-                    <option value="jm" selected>JM (焦煤)</option>
-                    <option value="SA">SA (纯碱)</option>
+                    <option value="">正在加载...</option>
                 </select>
             </div>
             <div class="control-group">
-                <label for="symbolInput">Symbol代码:</label>
-                <input type="text" id="symbolInput" value="jm2509" placeholder="例如: jm2509, SA509">
+                <label for="symbolSelect">Symbol代码:</label>
+                <select id="symbolSelect">
+                    <option value="">请先选择数据表</option>
+                </select>
             </div>
             <div class="control-group">
                 <button onclick="queryData()" class="query-btn">查询数据</button>
@@ -670,13 +673,78 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             chart.update();
         }
 
+        // 加载所有表
+        function loadTables() {
+            fetch('/tables')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error('加载表失败:', data.error);
+                        return;
+                    }
+                    
+                    const tableSelect = document.getElementById('tableSelect');
+                    tableSelect.innerHTML = '<option value="">请选择数据表</option>';
+                    
+                    data.tables.forEach(table => {
+                        const option = document.createElement('option');
+                        option.value = table;
+                        option.textContent = table.toUpperCase();
+                        tableSelect.appendChild(option);
+                    });
+                })
+                .catch(error => {
+                    console.error('加载表失败:', error);
+                });
+        }
+        
+        // 加载指定表的symbols
+        function loadSymbols(table) {
+            if (!table) {
+                const symbolSelect = document.getElementById('symbolSelect');
+                symbolSelect.innerHTML = '<option value="">请先选择数据表</option>';
+                return;
+            }
+            
+            const symbolSelect = document.getElementById('symbolSelect');
+            symbolSelect.innerHTML = '<option value="">正在加载...</option>';
+            
+            fetch('/symbols?table=' + encodeURIComponent(table))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        symbolSelect.innerHTML = '<option value="">加载失败</option>';
+                        console.error('加载symbols失败:', data.error);
+                        return;
+                    }
+                    
+                    symbolSelect.innerHTML = '<option value="">请选择Symbol</option>';
+                    
+                    data.symbols.forEach(symbol => {
+                        const option = document.createElement('option');
+                        option.value = symbol;
+                        option.textContent = symbol;
+                        symbolSelect.appendChild(option);
+                    });
+                })
+                .catch(error => {
+                    symbolSelect.innerHTML = '<option value="">加载失败</option>';
+                    console.error('加载symbols失败:', error);
+                });
+        }
+
         // 查询数据
         function queryData() {
             const table = document.getElementById('tableSelect').value;
-            const symbol = document.getElementById('symbolInput').value.trim();
+            const symbol = document.getElementById('symbolSelect').value;
+            
+            if (!table) {
+                alert('请选择数据表');
+                return;
+            }
             
             if (!symbol) {
-                alert('请输入Symbol代码');
+                alert('请选择Symbol代码');
                 return;
             }
             
@@ -737,28 +805,19 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
 
         // 刷新数据
         function refreshData() {
-            queryData();
+            const table = document.getElementById('tableSelect').value;
+            const symbol = document.getElementById('symbolSelect').value;
+            if (table && symbol) {
+                queryData();
+            } else {
+                updateChart();
+            }
         }
         
-        // 表选择变化时自动更新symbol输入框的示例
+        // 表选择变化时加载对应的symbols
         document.getElementById('tableSelect').addEventListener('change', function() {
             const table = this.value;
-            const symbolInput = document.getElementById('symbolInput');
-            
-            if (table === 'jm') {
-                symbolInput.value = 'jm2509';
-                symbolInput.placeholder = '例如: jm2509, jm2501';
-            } else if (table === 'SA') {
-                symbolInput.value = 'SA509';
-                symbolInput.placeholder = '例如: SA509, SA501';
-            }
-        });
-        
-        // 支持回车键查询
-        document.getElementById('symbolInput').addEventListener('keypress', function(event) {
-            if (event.key === 'Enter') {
-                queryData();
-            }
+            loadSymbols(table);
         });
 
         // 键盘快捷键
@@ -784,6 +843,7 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
         // 页面加载完成后初始化
         window.onload = function() {
             initChart();
+            loadTables();
             updateChart();
         };
     </script>
@@ -983,9 +1043,11 @@ func webDataHandler(w http.ResponseWriter, r *http.Request) {
 
 // 动态查询市场数据
 func webQueryMarketDataDynamic(table, symbol string) ([]WebMarketData, error) {
-	// 验证表名，防止SQL注入
-	if table != "jm" && table != "SA" {
-		return nil, fmt.Errorf("不支持的表名: %s", table)
+	// 验证表名是否存在，防止SQL注入
+	checkQuery := fmt.Sprintf("SELECT 1 FROM feature.%s LIMIT 1", table)
+	_, err := webExecuteQuery(checkQuery)
+	if err != nil {
+		return nil, fmt.Errorf("表 %s 不存在或无法访问: %w", table, err)
 	}
 
 	query := fmt.Sprintf(`
@@ -1074,4 +1136,81 @@ func webCalculateAverage(data []float64) float64 {
 		sum += val
 	}
 	return sum / float64(len(data))
+}
+
+// 获取所有表的API处理器
+func webTablesHandler(w http.ResponseWriter, r *http.Request) {
+	query := "SHOW TABLES"
+	result, err := webExecuteQuery(query)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("获取表列表失败: %v", err),
+		})
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	var tables []string
+	for _, line := range lines {
+		if line != "" {
+			tables = append(tables, strings.TrimSpace(line))
+		}
+	}
+
+	response := map[string]interface{}{
+		"tables": tables,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// 获取指定表的所有symbol的API处理器
+func webSymbolsHandler(w http.ResponseWriter, r *http.Request) {
+	table := r.URL.Query().Get("table")
+	if table == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "缺少table参数",
+		})
+		return
+	}
+
+	// 验证表名是否存在，防止SQL注入
+	checkQuery := fmt.Sprintf("SELECT 1 FROM feature.%s LIMIT 1", table)
+	_, err := webExecuteQuery(checkQuery)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("表 %s 不存在或无法访问", table),
+		})
+		return
+	}
+
+	query := fmt.Sprintf("SELECT DISTINCT symbol FROM feature.%s ORDER BY symbol", table)
+	result, err := webExecuteQuery(query)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("获取symbol列表失败: %v", err),
+		})
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	var symbols []string
+	for _, line := range lines {
+		if line != "" {
+			symbols = append(symbols, strings.TrimSpace(line))
+		}
+	}
+
+	response := map[string]interface{}{
+		"table":   table,
+		"symbols": symbols,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
