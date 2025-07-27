@@ -373,6 +373,44 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
         .query-btn:hover {
             background-color: #218838 !important;
         }
+        .input-mode-toggle {
+            margin-top: 5px;
+            font-size: 12px;
+        }
+        .input-mode-toggle label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: normal !important;
+            cursor: pointer;
+        }
+        .input-mode-toggle input[type="checkbox"] {
+            width: auto;
+            min-width: auto;
+        }
+        .error-message {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .success-message {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        datalist {
+            background-color: white;
+        }
     </style>
 </head>
 <body>
@@ -384,20 +422,39 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
         
         <div class="query-controls">
             <div class="control-group">
-                <label for="tableSelect">选择数据表:</label>
-                <select id="tableSelect">
+                <label for="tableInput">数据表名:</label>
+                <input type="text" id="tableInput" placeholder="例如: jm, SA, MA, rb" list="tableList">
+                <datalist id="tableList">
+                    <!-- 动态加载的表选项 -->
+                </datalist>
+                <div class="input-mode-toggle">
+                    <label>
+                        <input type="checkbox" id="tableDropdownMode"> 使用下拉选择
+                    </label>
+                </div>
+                <select id="tableSelect" style="display: none;">
                     <option value="">正在加载...</option>
                 </select>
             </div>
             <div class="control-group">
-                <label for="symbolSelect">Symbol代码:</label>
-                <select id="symbolSelect">
+                <label for="symbolInput">Symbol代码:</label>
+                <input type="text" id="symbolInput" placeholder="例如: jm2509, SA509, MA509" list="symbolList">
+                <datalist id="symbolList">
+                    <!-- 动态加载的symbol选项 -->
+                </datalist>
+                <div class="input-mode-toggle">
+                    <label>
+                        <input type="checkbox" id="symbolDropdownMode"> 使用下拉选择
+                    </label>
+                </div>
+                <select id="symbolSelect" style="display: none;">
                     <option value="">请先选择数据表</option>
                 </select>
             </div>
             <div class="control-group">
                 <button onclick="queryData()" class="query-btn">查询数据</button>
             </div>
+            <div class="error-message" id="errorMessage" style="display: none;"></div>
         </div>
         
         <div class="stats" id="stats">
@@ -673,6 +730,28 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             chart.update();
         }
 
+        // 显示错误消息
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            errorDiv.className = 'error-message';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // 显示成功消息
+        function showSuccess(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            errorDiv.className = 'success-message';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 3000);
+        }
+
         // 加载所有表
         function loadTables() {
             fetch('/tables')
@@ -683,18 +762,30 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
                         return;
                     }
                     
+                    // 更新下拉框
                     const tableSelect = document.getElementById('tableSelect');
                     tableSelect.innerHTML = '<option value="">请选择数据表</option>';
                     
+                    // 更新datalist
+                    const tableList = document.getElementById('tableList');
+                    tableList.innerHTML = '';
+                    
                     data.tables.forEach(table => {
+                        // 下拉框选项
                         const option = document.createElement('option');
                         option.value = table;
                         option.textContent = table.toUpperCase();
                         tableSelect.appendChild(option);
+                        
+                        // datalist选项
+                        const dataOption = document.createElement('option');
+                        dataOption.value = table;
+                        tableList.appendChild(dataOption);
                     });
                 })
                 .catch(error => {
                     console.error('加载表失败:', error);
+                    showError('加载表列表失败: ' + error.message);
                 });
         }
         
@@ -703,6 +794,8 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             if (!table) {
                 const symbolSelect = document.getElementById('symbolSelect');
                 symbolSelect.innerHTML = '<option value="">请先选择数据表</option>';
+                const symbolList = document.getElementById('symbolList');
+                symbolList.innerHTML = '';
                 return;
             }
             
@@ -715,36 +808,64 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
                     if (data.error) {
                         symbolSelect.innerHTML = '<option value="">加载失败</option>';
                         console.error('加载symbols失败:', data.error);
+                        showError('加载symbols失败: ' + data.error);
                         return;
                     }
                     
+                    // 更新下拉框
                     symbolSelect.innerHTML = '<option value="">请选择Symbol</option>';
                     
+                    // 更新datalist
+                    const symbolList = document.getElementById('symbolList');
+                    symbolList.innerHTML = '';
+                    
                     data.symbols.forEach(symbol => {
+                        // 下拉框选项
                         const option = document.createElement('option');
                         option.value = symbol;
                         option.textContent = symbol;
                         symbolSelect.appendChild(option);
+                        
+                        // datalist选项
+                        const dataOption = document.createElement('option');
+                        dataOption.value = symbol;
+                        symbolList.appendChild(dataOption);
                     });
                 })
                 .catch(error => {
                     symbolSelect.innerHTML = '<option value="">加载失败</option>';
                     console.error('加载symbols失败:', error);
+                    showError('加载symbols失败: ' + error.message);
                 });
+        }
+
+        // 获取当前输入的表名和symbol
+        function getCurrentInputs() {
+            const tableDropdownMode = document.getElementById('tableDropdownMode').checked;
+            const symbolDropdownMode = document.getElementById('symbolDropdownMode').checked;
+            
+            const table = tableDropdownMode ? 
+                document.getElementById('tableSelect').value : 
+                document.getElementById('tableInput').value.trim();
+                
+            const symbol = symbolDropdownMode ? 
+                document.getElementById('symbolSelect').value : 
+                document.getElementById('symbolInput').value.trim();
+                
+            return { table, symbol };
         }
 
         // 查询数据
         function queryData() {
-            const table = document.getElementById('tableSelect').value;
-            const symbol = document.getElementById('symbolSelect').value;
+            const { table, symbol } = getCurrentInputs();
             
             if (!table) {
-                alert('请选择数据表');
+                showError('请输入或选择数据表名');
                 return;
             }
             
             if (!symbol) {
-                alert('请选择Symbol代码');
+                showError('请输入或选择Symbol代码');
                 return;
             }
             
@@ -764,7 +885,8 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
                 })
                 .then(data => {
                     if (data.error) {
-                        document.getElementById('status').textContent = '错误: ' + data.error;
+                        showError(data.error);
+                        document.getElementById('status').textContent = '查询失败';
                         return;
                     }
 
@@ -792,6 +914,9 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
                     // 更新统计信息
                     updateStats(data.stats);
                     
+                    // 显示成功消息
+                    showSuccess('数据查询成功！');
+                    
                     // 更新状态
                     document.getElementById('status').textContent = 
                         '数据查询完成 | 表: ' + table.toUpperCase() + ' | Symbol: ' + symbol.toUpperCase() + ' | 最后更新: ' + new Date().toLocaleTimeString() + 
@@ -799,14 +924,14 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    document.getElementById('status').textContent = '数据查询失败: ' + error.message;
+                    showError('数据查询失败: ' + error.message);
+                    document.getElementById('status').textContent = '查询失败';
                 });
         }
 
         // 刷新数据
         function refreshData() {
-            const table = document.getElementById('tableSelect').value;
-            const symbol = document.getElementById('symbolSelect').value;
+            const { table, symbol } = getCurrentInputs();
             if (table && symbol) {
                 queryData();
             } else {
@@ -814,10 +939,86 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             }
         }
         
-        // 表选择变化时加载对应的symbols
-        document.getElementById('tableSelect').addEventListener('change', function() {
-            const table = this.value;
-            loadSymbols(table);
+        // 切换输入模式
+        function toggleInputMode(type) {
+            const isTable = type === 'table';
+            const checkbox = document.getElementById(isTable ? 'tableDropdownMode' : 'symbolDropdownMode');
+            const input = document.getElementById(isTable ? 'tableInput' : 'symbolInput');
+            const select = document.getElementById(isTable ? 'tableSelect' : 'symbolSelect');
+            
+            if (checkbox.checked) {
+                input.style.display = 'none';
+                select.style.display = 'block';
+            } else {
+                input.style.display = 'block';
+                select.style.display = 'none';
+            }
+        }
+        
+        // 同步输入框和下拉框的值
+        function syncInputValues(type) {
+            const isTable = type === 'table';
+            const checkbox = document.getElementById(isTable ? 'tableDropdownMode' : 'symbolDropdownMode');
+            const input = document.getElementById(isTable ? 'tableInput' : 'symbolInput');
+            const select = document.getElementById(isTable ? 'tableSelect' : 'symbolSelect');
+            
+            if (checkbox.checked) {
+                // 从输入框同步到下拉框
+                const inputValue = input.value.trim();
+                if (inputValue) {
+                    // 查找匹配的选项
+                    for (let option of select.options) {
+                        if (option.value === inputValue) {
+                            select.value = inputValue;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // 从下拉框同步到输入框
+                if (select.value) {
+                    input.value = select.value;
+                }
+            }
+        }
+        
+        // 表输入变化时自动加载symbols
+        function handleTableInputChange() {
+            const tableDropdownMode = document.getElementById('tableDropdownMode').checked;
+            const table = tableDropdownMode ? 
+                document.getElementById('tableSelect').value : 
+                document.getElementById('tableInput').value.trim();
+            
+            if (table) {
+                loadSymbols(table);
+            }
+        }
+        
+        // 事件监听器
+        document.getElementById('tableDropdownMode').addEventListener('change', function() {
+            syncInputValues('table');
+            toggleInputMode('table');
+        });
+        
+        document.getElementById('symbolDropdownMode').addEventListener('change', function() {
+            syncInputValues('symbol');
+            toggleInputMode('symbol');
+        });
+        
+        document.getElementById('tableSelect').addEventListener('change', handleTableInputChange);
+        document.getElementById('tableInput').addEventListener('input', handleTableInputChange);
+        
+        // 支持回车键查询
+        document.getElementById('tableInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                queryData();
+            }
+        });
+        
+        document.getElementById('symbolInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                queryData();
+            }
         });
 
         // 键盘快捷键
