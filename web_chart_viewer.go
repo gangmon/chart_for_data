@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,18 +22,18 @@ const (
 )
 
 type WebMarketData struct {
-	Symbol       string    `json:"symbol"`
-	Time         time.Time `json:"time"`
-	Price        float32   `json:"price"`
-	Vol          uint32    `json:"vol"`
-	OpenInterest uint32    `json:"open_interest"`
-	DiffVol      int32     `json:"diff_vol"`
-	DiffOI       int32     `json:"diff_oi"`
-	Bid1         float32   `json:"bid_1"`
-	BidVolumn1   uint32    `json:"bid_volumn_1"`
-	Ask1         float32   `json:"ask_1"`
-	AskVolumn1   uint32    `json:"ask_volumn_1"`
-	DateTime     uint64    `json:"datetime"`
+	Symbol       string  `json:"symbol"`
+	Time         string  `json:"time"`
+	Price        float32 `json:"price"`
+	Vol          uint32  `json:"vol"`
+	OpenInterest uint32  `json:"open_interest"`
+	DiffVol      int32   `json:"diff_vol"`
+	DiffOI       int32   `json:"diff_oi"`
+	Bid1         float32 `json:"bid_1"`
+	BidVolumn1   uint32  `json:"bid_volumn_1"`
+	Ask1         float32 `json:"ask_1"`
+	AskVolumn1   uint32  `json:"ask_volumn_1"`
+	DateTime     uint64  `json:"datetime"`
 }
 
 var (
@@ -206,7 +207,7 @@ func webParseTabSeparatedData(data string) ([]WebMarketData, error) {
 
 		md := WebMarketData{
 			Symbol:       fields[0],
-			Time:         parsedTime,
+			Time:         parsedTime.Format("2006-01-02 15:04:05"),
 			Price:        float32(price),
 			Vol:          uint32(vol),
 			OpenInterest: uint32(openInterest),
@@ -1072,7 +1073,13 @@ func webChartHandler(w http.ResponseWriter, r *http.Request) {
 	oiValues := make([]float64, len(data))
 
 	for i, record := range data {
-		xValues[i] = record.Time
+		// 解析时间字符串
+		parsedTime, err := time.Parse("2006-01-02 15:04:05", record.Time)
+		if err != nil {
+			log.Printf("Failed to parse time %s: %v", record.Time, err)
+			continue
+		}
+		xValues[i] = parsedTime
 		priceValues[i] = float64(record.Price)
 		oiValues[i] = float64(record.OpenInterest)
 	}
@@ -1206,7 +1213,10 @@ func webDataHandler(w http.ResponseWriter, r *http.Request) {
 	allData := webAllData
 	webDataMutex.RUnlock()
 
+	fmt.Printf("Retrieved data: %d current, %d total\n", len(data), len(allData))
+
 	if len(data) == 0 {
+		fmt.Printf("No data available, returning error\n")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": "No data available",
@@ -1214,32 +1224,124 @@ func webDataHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Printf("Data available, proceeding with stats calculation\n")
+
 	// 计算统计信息
 	priceValues := make([]float64, len(data))
 	oiValues := make([]float64, len(data))
+
+	fmt.Printf("Starting to calculate stats for %d data points\n", len(data))
 
 	for i, record := range data {
 		priceValues[i] = float64(record.Price)
 		oiValues[i] = float64(record.OpenInterest)
 	}
 
+	fmt.Printf("Calculated price and OI values\n")
+
+	avgPrice := webCalculateAverage(priceValues)
+	maxPrice := webFindMax(priceValues)
+	minPrice := webFindMin(priceValues)
+	avgOI := webCalculateAverage(oiValues)
+
+	// 确保所有统计值都是有效的
+	if math.IsInf(avgPrice, 0) || math.IsNaN(avgPrice) {
+		avgPrice = 0
+	}
+	if math.IsInf(maxPrice, 0) || math.IsNaN(maxPrice) {
+		maxPrice = 0
+	}
+	if math.IsInf(minPrice, 0) || math.IsNaN(minPrice) {
+		minPrice = 0
+	}
+	if math.IsInf(avgOI, 0) || math.IsNaN(avgOI) {
+		avgOI = 0
+	}
+
 	stats := map[string]interface{}{
-		"avg_price":     webCalculateAverage(priceValues),
-		"max_price":     webFindMax(priceValues),
-		"min_price":     webFindMin(priceValues),
-		"avg_oi":        webCalculateAverage(oiValues),
+		"avg_price":     avgPrice,
+		"max_price":     maxPrice,
+		"min_price":     minPrice,
+		"avg_oi":        avgOI,
 		"data_points":   len(data),
 		"total_records": len(allData),
 	}
 
-	response := map[string]interface{}{
-		"data":      data,
-		"stats":     stats,
-		"timestamp": time.Now(),
+	fmt.Printf("Calculated stats: avg_price=%.2f, data_points=%d\n", avgPrice, len(data))
+
+	// 过滤数据中的无穷大和NaN值，并创建清理后的数据
+	cleanData := make([]WebMarketData, 0, len(data))
+	for _, record := range data {
+		// 创建一个新的记录，确保所有float字段都是有效的
+		cleanRecord := record
+
+		// 检查并清理Price字段
+		if math.IsInf(float64(record.Price), 0) || math.IsNaN(float64(record.Price)) {
+			cleanRecord.Price = 0
+		}
+
+		// 检查并清理Bid1字段
+		if math.IsInf(float64(record.Bid1), 0) || math.IsNaN(float64(record.Bid1)) {
+			cleanRecord.Bid1 = 0
+		}
+
+		// 检查并清理Ask1字段
+		if math.IsInf(float64(record.Ask1), 0) || math.IsNaN(float64(record.Ask1)) {
+			cleanRecord.Ask1 = 0
+		}
+
+		cleanData = append(cleanData, cleanRecord)
 	}
 
+	fmt.Printf("Cleaned data: %d records processed\n", len(cleanData))
+
+	// 简化响应，避免time.Time可能的JSON编码问题
+	response := map[string]interface{}{
+		"data":      cleanData,
+		"stats":     stats,
+		"timestamp": time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	fmt.Printf("Created response object\n")
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+
+	// 添加调试信息
+	fmt.Printf("Encoding JSON response with %d data points\n", len(cleanData))
+
+	// 使用自定义JSON编码来处理可能的无穷大值
+	jsonBytes, err := json.Marshal(response)
+	if err != nil {
+		fmt.Printf("JSON encoding error: %v\n", err)
+		// 如果JSON编码失败，返回一个简化的响应
+		fallbackResponse := map[string]interface{}{
+			"error": "数据包含无效值，无法序列化",
+			"stats": map[string]interface{}{
+				"data_points": len(cleanData),
+				"message":     "请检查数据源",
+			},
+		}
+		json.NewEncoder(w).Encode(fallbackResponse)
+		return
+	}
+
+	// 检查JSON中是否包含无穷大值
+	jsonStr := string(jsonBytes)
+	if strings.Contains(jsonStr, "Infinity") || strings.Contains(jsonStr, "NaN") {
+		fmt.Printf("JSON contains invalid values, returning error\n")
+		fallbackResponse := map[string]interface{}{
+			"error": "数据包含无穷大或NaN值",
+			"stats": map[string]interface{}{
+				"data_points": len(cleanData),
+				"message":     "数据已被过滤",
+			},
+		}
+		json.NewEncoder(w).Encode(fallbackResponse)
+		return
+	}
+
+	w.Write(jsonBytes)
+	fmt.Printf("JSON response sent successfully\n")
 }
 
 // 动态查询市场数据
@@ -1306,11 +1408,21 @@ func webFindMax(data []float64) float64 {
 	if len(data) == 0 {
 		return 0
 	}
-	max := data[0]
+
+	var max float64
+	hasValidValue := false
+
 	for _, val := range data {
-		if val > max {
-			max = val
+		if !math.IsInf(val, 0) && !math.IsNaN(val) {
+			if !hasValidValue || val > max {
+				max = val
+				hasValidValue = true
+			}
 		}
+	}
+
+	if !hasValidValue {
+		return 0
 	}
 	return max
 }
@@ -1319,11 +1431,21 @@ func webFindMin(data []float64) float64 {
 	if len(data) == 0 {
 		return 0
 	}
-	min := data[0]
+
+	var min float64
+	hasValidValue := false
+
 	for _, val := range data {
-		if val < min {
-			min = val
+		if !math.IsInf(val, 0) && !math.IsNaN(val) {
+			if !hasValidValue || val < min {
+				min = val
+				hasValidValue = true
+			}
 		}
+	}
+
+	if !hasValidValue {
+		return 0
 	}
 	return min
 }
@@ -1333,10 +1455,17 @@ func webCalculateAverage(data []float64) float64 {
 		return 0
 	}
 	sum := 0.0
+	validCount := 0
 	for _, val := range data {
-		sum += val
+		if !math.IsInf(val, 0) && !math.IsNaN(val) {
+			sum += val
+			validCount++
+		}
 	}
-	return sum / float64(len(data))
+	if validCount == 0 {
+		return 0
+	}
+	return sum / float64(validCount)
 }
 
 // 获取所有表的API处理器
