@@ -327,13 +327,74 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             margin: 20px 0;
             text-align: center;
         }
+        .query-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .control-group label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #495057;
+            font-size: 14px;
+        }
+        .control-group select,
+        .control-group input {
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 150px;
+        }
+        .control-group select:focus,
+        .control-group input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        .query-btn {
+            background-color: #28a745 !important;
+            padding: 8px 20px !important;
+            margin-top: 20px !important;
+        }
+        .query-btn:hover {
+            background-color: #218838 !important;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>JM2509 实时市场数据图表</h1>
+            <h1>实时市场数据图表</h1>
             <p>JavaScript交互式图表 - 支持缩放、平移和详细数据查看</p>
+        </div>
+        
+        <div class="query-controls">
+            <div class="control-group">
+                <label for="tableSelect">选择数据表:</label>
+                <select id="tableSelect">
+                    <option value="jm" selected>JM (焦煤)</option>
+                    <option value="SA">SA (纯碱)</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="symbolInput">Symbol代码:</label>
+                <input type="text" id="symbolInput" value="jm2509" placeholder="例如: jm2509, SA509">
+            </div>
+            <div class="control-group">
+                <button onclick="queryData()" class="query-btn">查询数据</button>
+            </div>
         </div>
         
         <div class="stats" id="stats">
@@ -609,10 +670,96 @@ func webIndexHandler(w http.ResponseWriter, r *http.Request) {
             chart.update();
         }
 
+        // 查询数据
+        function queryData() {
+            const table = document.getElementById('tableSelect').value;
+            const symbol = document.getElementById('symbolInput').value.trim();
+            
+            if (!symbol) {
+                alert('请输入Symbol代码');
+                return;
+            }
+            
+            document.getElementById('status').textContent = '正在查询数据...';
+            
+            // 更新图表标题
+            chart.options.plugins.title.text = symbol.toUpperCase() + ' 交互式数据图表';
+            chart.update('none');
+            
+            // 发送查询请求
+            fetch('/data?table=' + encodeURIComponent(table) + '&symbol=' + encodeURIComponent(symbol))
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('status').textContent = '错误: ' + data.error;
+                        return;
+                    }
+
+                    chartData = data;
+
+                    // 更新图表数据
+                    const labels = data.data.map(item => {
+                        const date = new Date(item.time);
+                        return date.toLocaleDateString('zh-CN', {
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                    });
+                    
+                    const prices = data.data.map(item => item.price);
+                    const openInterests = data.data.map(item => item.open_interest);
+
+                    chart.data.labels = labels;
+                    chart.data.datasets[0].data = prices;
+                    chart.data.datasets[1].data = openInterests;
+                    chart.update('none');
+
+                    // 更新统计信息
+                    updateStats(data.stats);
+                    
+                    // 更新状态
+                    document.getElementById('status').textContent = 
+                        '数据查询完成 | 表: ' + table.toUpperCase() + ' | Symbol: ' + symbol.toUpperCase() + ' | 最后更新: ' + new Date().toLocaleTimeString() + 
+                        ' | 显示 ' + data.stats.data_points + ' 条采样数据，共 ' + data.stats.total_records + ' 条原始记录';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('status').textContent = '数据查询失败: ' + error.message;
+                });
+        }
+
         // 刷新数据
         function refreshData() {
-            updateChart();
+            queryData();
         }
+        
+        // 表选择变化时自动更新symbol输入框的示例
+        document.getElementById('tableSelect').addEventListener('change', function() {
+            const table = this.value;
+            const symbolInput = document.getElementById('symbolInput');
+            
+            if (table === 'jm') {
+                symbolInput.value = 'jm2509';
+                symbolInput.placeholder = '例如: jm2509, jm2501';
+            } else if (table === 'SA') {
+                symbolInput.value = 'SA509';
+                symbolInput.placeholder = '例如: SA509, SA501';
+            }
+        });
+        
+        // 支持回车键查询
+        document.getElementById('symbolInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                queryData();
+            }
+        });
 
         // 键盘快捷键
         document.addEventListener('keydown', function(event) {
@@ -748,8 +895,54 @@ func webChartHandler(w http.ResponseWriter, r *http.Request) {
 
 // 数据API处理器
 func webDataHandler(w http.ResponseWriter, r *http.Request) {
+	// 获取查询参数
+	table := r.URL.Query().Get("table")
+	symbol := r.URL.Query().Get("symbol")
+
+	// 如果有查询参数，执行动态查询
+	if table != "" && symbol != "" {
+		data, err := webQueryMarketDataDynamic(table, symbol)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": fmt.Sprintf("查询失败: %v", err),
+			})
+			return
+		}
+
+		if len(data) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": fmt.Sprintf("未找到表 %s 中 symbol = %s 的数据", table, symbol),
+			})
+			return
+		}
+
+		// 更新全局数据
+		webDataMutex.Lock()
+		webAllData = data
+
+		// 对数据进行采样
+		sampleSize := 100
+		if len(data) > sampleSize {
+			step := len(data) / sampleSize
+			webCurrentData = make([]WebMarketData, 0, sampleSize)
+			for i := 0; i < len(data); i += step {
+				webCurrentData = append(webCurrentData, data[i])
+			}
+		} else {
+			webCurrentData = data
+		}
+		webDataMutex.Unlock()
+
+		fmt.Printf("Dynamic query: table=%s, symbol=%s, found %d records, sampled %d\n",
+			table, symbol, len(data), len(webCurrentData))
+	}
+
+	// 返回当前数据
 	webDataMutex.RLock()
 	data := webCurrentData
+	allData := webAllData
 	webDataMutex.RUnlock()
 
 	if len(data) == 0 {
@@ -775,7 +968,7 @@ func webDataHandler(w http.ResponseWriter, r *http.Request) {
 		"min_price":     webFindMin(priceValues),
 		"avg_oi":        webCalculateAverage(oiValues),
 		"data_points":   len(data),
-		"total_records": len(webAllData),
+		"total_records": len(allData),
 	}
 
 	response := map[string]interface{}{
@@ -786,6 +979,41 @@ func webDataHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// 动态查询市场数据
+func webQueryMarketDataDynamic(table, symbol string) ([]WebMarketData, error) {
+	// 验证表名，防止SQL注入
+	if table != "jm" && table != "SA" {
+		return nil, fmt.Errorf("不支持的表名: %s", table)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT 
+			symbol, 
+			time, 
+			price, 
+			vol, 
+			open_interest, 
+			diff_vol, 
+			diff_oi, 
+			bid_1, 
+			bid_volumn_1, 
+			ask_1, 
+			ask_volumn_1, 
+			datetime
+		FROM feature.%s 
+		WHERE symbol = '%s'
+		ORDER BY time ASC 
+		FORMAT TabSeparated
+	`, table, strings.ReplaceAll(symbol, "'", "''")) // 简单的SQL转义
+
+	result, err := webExecuteQuery(query)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+
+	return webParseTabSeparatedData(result)
 }
 
 func webNormalizeToRange(source, target []float64) []float64 {
